@@ -1,5 +1,6 @@
 import * as Console from "effect/Console";
 import type * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
@@ -10,20 +11,22 @@ import picomatch from "picomatch";
 
 import type { ProviderService } from "../../Provider.ts";
 import type { ProviderMode } from "../../ProviderMode.ts";
-import * as Clank from "../../Util/Clank.ts";
+import * as CliKit from "../../Cli/CliKit/index.ts";
 import type { ScopedPlanStatusSession } from "../Cli.ts";
-import { isNonInteractive } from "../selectCli.ts";
-import * as NukeUI from "../tui/components/Nuke.tsx";
+import type * as NukeUI from "../views/Nuke.tsx";
 
 import {
   buildStackProviders,
-  dryRun,
+  config,
   envFile,
+  exitDeclined,
   instrumentCommand,
   profile,
-  script,
   yes,
 } from "./_shared.ts";
+import { resolveProfileName } from "../ProfileSelection.ts";
+
+const nukeTui = Effect.promise(() => import("../views/Nuke.tsx"));
 
 const includeFlag = Flag.string("include").pipe(
   Flag.withDescription(
@@ -45,13 +48,12 @@ const filterFlag = Flag.string("filter").pipe(
     "JavaScript expression evaluated with `resource` in scope " +
       '(e.g. \'resource.Type === "Cloudflare.Worker" && ' +
       'resource.workerName.startsWith("alchemy-")\'). Any resource for which ' +
-      "an expression is truthy is SPARED. Repeatable.",
+      "an expression is truthy is retained. Repeatable.",
   ),
   Flag.atLeast(0),
 );
 
 const verboseFlag = Flag.boolean("verbose").pipe(
-  Flag.withAlias("v"),
   Flag.withDescription(
     "List every individual resource that will be deleted, not just per-provider counts.",
   ),
@@ -71,20 +73,18 @@ const concurrencyFlag = Flag.integer("concurrency").pipe(
 
 const timeoutFlag = Flag.integer("timeout").pipe(
   Flag.withDescription(
-    "Per-provider timeout (seconds) for each list/delete call, so one slow or " +
-      "hanging provider can't stall the whole run. Default: 120.",
+    "Per-provider timeout in seconds for each list/delete call. Default: 120.",
   ),
   Flag.withDefault(120),
+  Flag.map(Duration.seconds),
 );
 
 const independentFlag = Flag.boolean("independent").pipe(
   Flag.withDescription(
-    "Delete every resource independently instead of in coordinated passes. " +
-      "In pass mode a single slow or hanging delete delays the next pass for " +
-      "everything; with --independent each resource retries its own delete " +
-      "with backoff, in parallel, until it succeeds or --retries is " +
-      "exhausted. Dependency violations resolve naturally as the blocking " +
-      "resources are deleted concurrently.",
+    "Delete each resource independently with per-resource retries and backoff " +
+      "instead of coordinated passes, where a single slow delete delays the " +
+      "next pass for everything. Dependency violations resolve naturally as " +
+      "the blocking resources are deleted concurrently.",
   ),
   Flag.withDefault(false),
 );
@@ -374,14 +374,18 @@ const nukeSession: ScopedPlanStatusSession = {
   done: () => Effect.void,
   note: () => Effect.void,
 };
+const dryRunFlag = Flag.boolean("dry-run").pipe(
+  Flag.withDescription("Scan and show deletion targets without deleting them"),
+  Flag.withDefault(false),
+);
 const nukeCommand = Command.make(
   "nuke",
   {
-    main: script,
+    main: config,
     envFile,
     profile,
     yes,
-    dryRun,
+    dryRun: dryRunFlag,
     verbose: verboseFlag,
     concurrency: concurrencyFlag,
     timeout: timeoutFlag,
@@ -395,7 +399,7 @@ const nukeCommand = Command.make(
   instrumentCommand(
     "unsafe.nuke",
     (a: { profile: string | undefined; main: string }) => ({
-      "alchemy.profile": a.profile,
+      "alchemy.profile": a.profile ?? "",
       "alchemy.main": a.main,
     }),
   )(
@@ -415,11 +419,12 @@ const nukeCommand = Command.make(
       filter,
       local,
     }) {
+      const profileName = yield* resolveProfileName(envFile, profile);
       // DEBUG=1 routes provider logs to the console (instead of the
       // .alchemy/log/out file) at Debug level and disables the TUI so the
       // log stream isn't clobbered by the progress renderer.
       const debug = !!process.env.DEBUG;
-      const interactive = !isNonInteractive() && !debug;
+      const interactive = (yield* CliKit.CliKit).terminal.input && !debug;
 
       // Build the user's providers() (+ state) layer so the resulting context
       // holds every resource provider plus the cloud-environment services
@@ -428,7 +433,7 @@ const nukeCommand = Command.make(
       const { context } = yield* buildStackProviders({
         main,
         envFile,
-        profile,
+        profile: profileName,
         logger: debug ? Logger.layer([Logger.defaultLogger]) : undefined,
         extra: Layer.succeed(MinimumLogLevel, debug ? "Debug" : "Info"),
       });
@@ -455,7 +460,7 @@ const nukeCommand = Command.make(
       }
 
       if (selected.length === 0) {
-        yield* Console.log(
+        yield* CliKit.accessors.output.warning(
           local
             ? "No local providers match the given --include/--exclude."
             : "No providers match the given --include/--exclude.",
@@ -474,12 +479,14 @@ const nukeCommand = Command.make(
 
       // ---- Scan phase --------------------------------------------------
       const scanUI = interactive
-        ? yield* Effect.sync(() => NukeUI.renderScan(selected.length))
+        ? yield* nukeTui.pipe(
+            Effect.flatMap(({ renderScan }) => renderScan(selected.length)),
+          )
         : undefined;
       const emitScan = (event: NukeUI.ScanEvent) =>
         scanUI ? Effect.sync(() => scanUI.emit(event)) : Effect.void;
 
-      const listed = yield* Effect.all(
+      const scan = Effect.all(
         selected.map(({ id, resolve }) =>
           Effect.gen(function* () {
             yield* emitScan({ kind: "start", id });
@@ -525,11 +532,9 @@ const nukeCommand = Command.make(
         ),
         { concurrency },
       );
-
-      if (scanUI) {
-        yield* Effect.sleep(10);
-        yield* Effect.sync(() => scanUI.unmount());
-      }
+      const listed = yield* scanUI === undefined
+        ? scan
+        : scan.pipe(Effect.ensuring(scanUI.close));
 
       // ---- Filter phase ------------------------------------------------
       const candidates = listed.flatMap(({ id, provider, items }) =>
@@ -551,7 +556,7 @@ const nukeCommand = Command.make(
 
       // ---- Report ------------------------------------------------------
       // One line per provider type with its to-delete count and how many were
-      // filtered out by --filter. With --verbose, also enumerate each
+      // retained by --filter. With --verbose, also enumerate each
       // individual resource that will be deleted.
       const byType = [...groupBy(candidates, (c) => c.id).entries()].sort(
         (a, b) => a[0].localeCompare(b[0]),
@@ -565,7 +570,7 @@ const nukeCommand = Command.make(
             const filtered = items.length - toDelete.length;
             yield* Console.log(
               `${id}  ${toDelete.length} to delete` +
-                (filtered > 0 ? ` (${filtered} filtered out)` : ""),
+                (filtered > 0 ? ` (${filtered} protected)` : ""),
             );
             if (verbose) {
               yield* Effect.forEach(
@@ -581,18 +586,18 @@ const nukeCommand = Command.make(
       yield* Console.log("");
       yield* Console.log(
         filteredTotal > 0
-          ? `${targets.length} resource(s) to delete (${filteredTotal} filtered out).`
+          ? `${targets.length} resource(s) to delete (${filteredTotal} protected).`
           : `${targets.length} resource(s) to delete.`,
       );
 
       if (targets.length === 0) {
-        yield* Console.log("Nothing to delete.");
+        yield* CliKit.accessors.output.info("Nothing to delete.");
         return;
       }
 
       if (dryRun) {
         yield* Console.log(
-          "Dry run: nothing was deleted. Re-run without --dry-run to delete.",
+          "Dry run complete: nothing was deleted. Re-run without --dry-run to delete.",
         );
         return;
       }
@@ -600,7 +605,7 @@ const nukeCommand = Command.make(
       // ---- Confirm -----------------------------------------------------
       const approved = yes
         ? true
-        : yield* Clank.confirm({
+        : yield* CliKit.accessors.prompt.confirm({
             message:
               `Permanently DELETE ${targets.length} ` +
               `${local ? "locally emulated " : ""}resource(s)? ` +
@@ -608,8 +613,8 @@ const nukeCommand = Command.make(
             initialValue: false,
           });
       if (!approved) {
-        yield* Console.log("Aborted.");
-        return;
+        yield* CliKit.accessors.output.info("Aborted.");
+        return yield* exitDeclined;
       }
 
       // ---- Delete phase ------------------------------------------------
@@ -617,7 +622,9 @@ const nukeCommand = Command.make(
         ([id, items]) => ({ id, total: items.length }),
       );
       const deleteUI = interactive
-        ? yield* Effect.sync(() => NukeUI.renderDelete(totals))
+        ? yield* nukeTui.pipe(
+            Effect.flatMap(({ renderDelete }) => renderDelete(totals)),
+          )
         : undefined;
       const emitDelete = (event: NukeUI.DeleteEvent) =>
         deleteUI ? Effect.sync(() => deleteUI.emit(event)) : Effect.void;
@@ -645,7 +652,7 @@ const nukeCommand = Command.make(
             force: true,
           })
           .pipe(
-            Effect.timeout(`${timeout} seconds`),
+            Effect.timeout(timeout),
             Effect.tapCause((cause) =>
               Effect.logWarning(
                 `nuke: delete failed for ${item.id} ${displayName(item.attr)}`,
@@ -786,7 +793,7 @@ const nukeCommand = Command.make(
       // Layer each component: 0 for sources, else 1 + max predecessor
       // layer. Tarjan emits components in reverse topological order, so
       // iterating backwards visits predecessors before dependents.
-      const layerOfComp: number[] = new Array(components.length).fill(0);
+      const layerOfComp = Array.from({ length: components.length }, () => 0);
       for (let i = components.length - 1; i >= 0; i--) {
         let layer = 0;
         for (const node of components[i]!) {
@@ -842,41 +849,41 @@ const nukeCommand = Command.make(
       }
 
       if (deleteUI) {
-        yield* Effect.sleep(10);
-        yield* Effect.sync(() => deleteUI.unmount());
+        yield* deleteUI.close;
       }
 
       const deleted = targets.length - remaining.length;
       yield* Console.log("");
-      yield* Console.log(
+      yield* CliKit.accessors.output.success(
         independent
           ? `Deleted ${deleted} resource(s).`
           : `Deleted ${deleted} resource(s) over ${pass} pass(es).`,
       );
       if (held.length > 0) {
-        yield* Console.log(
+        yield* CliKit.accessors.output.warning(
           `Held back (their dependent types could not be fully deleted): ${held.join("; ")}`,
         );
       }
       if (remaining.length > 0) {
-        yield* Console.log(
+        yield* CliKit.accessors.output.error(
           `${remaining.length} resource(s) could not be deleted.`,
         );
       }
     }),
   ),
 ).pipe(
-  // hide the command because it's dangerous and we don't want agents to discover and use it
-  Command.unlisted,
   Command.withDescription(
     "Enumerate every live resource across the stack's providers and delete " +
       "them. DESTRUCTIVE — use --include/--exclude/--filter to scope it. " +
       "Pass --local to target locally emulated resources (floci, the " +
       "Cloudflare local runtime) instead of the real cloud.",
   ),
+  // Hide dangerous operations from help and completion discovery.
+  Command.unlisted,
 );
 
 export const unsafeCommand = Command.make("unsafe", {}).pipe(
-  Command.withDescription("Dangerous, irreversible operations."),
+  Command.withDescription("Dangerous, irreversible operations"),
   Command.withSubcommands([nukeCommand]),
+  Command.unlisted,
 );
