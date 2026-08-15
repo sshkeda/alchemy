@@ -25,6 +25,7 @@ export const FLOCI_ACCOUNT_ID = LOCAL_ACCOUNT_ID;
 
 /** Region every floci-emulated resource lives in. */
 export const FLOCI_REGION = "us-east-1";
+const DEFAULT_LOCAL_ENDPOINT = `http://localhost:${Floci.DEFAULT_FLOCI_PORT}`;
 
 // Annotated (not inferred): the inferred union names distilled's Endpoint
 // through a non-portable relative path (TS2883), and consumers only ever
