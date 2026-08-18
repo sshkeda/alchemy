@@ -417,6 +417,7 @@
     "@cloudflare/containers": "catalog:cloudflare",
     "@cloudflare/puppeteer": "catalog:cloudflare",
     "@cloudflare/workers-types": "catalog:cloudflare-runtime",
+    "@cloudflare/unenv-preset": "catalog:cloudflare-runtime",
     "@alchemy.run/frontend-frameworks": "workspace:*",
     "@effect/platform-bun": "catalog:effect",
     "@effect/platform-node": "catalog:effect",
@@ -465,8 +466,10 @@
     "tsdown": "^0.15.4",
     "tsx": "catalog:tooling",
     "typescript": "catalog:build",
+    "unenv": "catalog:cloudflare-runtime",
     "uuid": "catalog:shared",
     "vitest": "catalog:testing",
+    "vocs": "catalog:frontend",
     "waku": "catalog:frontend",
     "wrangler": "catalog:cloudflare",
     "ws": "catalog:shared"
