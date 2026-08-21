@@ -499,7 +499,7 @@ const nukeCommand = Command.make(
               const provider = yield* resolve;
               const attrs = yield* provider
                 .list()
-                .pipe(Effect.timeout(`${timeout} seconds`));
+                .pipe(Effect.timeout(timeout));
               return { provider, attrs };
             }).pipe(
               // Log inside the provided scope so the failure lands in the
