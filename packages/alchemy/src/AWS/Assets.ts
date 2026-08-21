@@ -223,7 +223,7 @@ const getBucketTags = (bucketName: string) =>
 
 /**
  * Create the tagged assets bucket for the current account+region and wait for
- * it to be addressable. Idempotent — used by `alchemy aws bootstrap` and by
+ * it to be addressable. Idempotent — used by `alchemy provider aws bootstrap` and by
  * the transparent local-emulator bootstrap in {@link AssetsLive}.
  */
 export const createAssetsBucket = Effect.gen(function* () {

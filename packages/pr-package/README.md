@@ -178,8 +178,8 @@ See `.github/workflows/pr-package.yaml` in this repo for the full pipeline (publ
 If a deploy errors mid-flight and leaves orphan state:
 
 ```sh
-bun alchemy state resources <StackName> <stage> ./your/stack.ts --profile <p>
-bun alchemy state clear     <StackName> <stage> ./your/stack.ts --profile <p> --yes
+bun alchemy state list <StackName>/<stage> --config ./your/stack.ts --profile <p>
+bun alchemy state delete <StackName>/<stage> --config ./your/stack.ts --profile <p>
 ```
 
 Then reconcile any actually-created Cloudflare resources via the dashboard before redeploying.
