@@ -4,6 +4,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import { profileCommandHint } from "../Util/interactive.ts";
 import * as Semaphore from "effect/Semaphore";
 import { withProfileCredentialsLock } from "./Lock.ts";
 
@@ -444,7 +445,7 @@ export const AuthProvider =
                   message:
                     `Stored ${name} configuration in profile '${profileName}' is not valid ` +
                     `for this version of alchemy (method '${config.method}'). ` +
-                    `Run \`alchemy profile edit ${profileName} --reconfigure ${name}\` to fix it.`,
+                    `Run \`${profileCommandHint(`alchemy profile edit ${profileName} --reconfigure ${name}`)}\` to fix it.`,
                   cause,
                 }),
             ),

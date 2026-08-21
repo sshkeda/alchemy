@@ -337,7 +337,7 @@ export const config = Flag.file("config", { mustExist: true }).pipe(
 
 export const profile = Flag.string("profile").pipe(
   Flag.withDescription(
-    "Auth profile to use. Defaults to $ALCHEMY_PROFILE, the stored default, or 'default'.",
+    "Auth profile to use. Defaults to $ALCHEMY_PROFILE or the stored default.",
   ),
   Flag.optional,
   Flag.map(Option.getOrUndefined),

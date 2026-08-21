@@ -24,6 +24,7 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import type { BindingNode, Plan } from "../Plan.ts";
+import { profileCommandHint } from "../Util/interactive.ts";
 import { AuthProviders } from "./AuthProvider.ts";
 import { ALCHEMY_PROFILE, ProfileStore } from "./Profile.ts";
 
@@ -106,7 +107,7 @@ export const credentialsRequired = (
       `for profile '${profileName}'.\n` +
       `These resources require ${demand.provider} credentials:\n` +
       `${resourceLines(demand)}\n` +
-      `Run \`alchemy profile edit ${profileName} --add ${demand.provider}\` to configure ` +
+      `Run \`${profileCommandHint(`alchemy profile edit ${profileName} --add ${demand.provider}`)}\` to configure ` +
       "credentials, or set CI=1 to use environment-variable credentials.",
   });
 

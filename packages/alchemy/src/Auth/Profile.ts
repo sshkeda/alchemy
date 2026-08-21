@@ -11,6 +11,7 @@ import * as Path from "effect/Path";
 import crypto from "node:crypto";
 import path from "pathe";
 import { writeFileAtomic } from "../Util/AtomicFile.ts";
+import { profileCommandHint } from "../Util/interactive.ts";
 import * as Console from "effect/Console";
 import {
   AuthError,
@@ -36,13 +37,6 @@ export {
 export const ALCHEMY_PROFILE = Config.string("ALCHEMY_PROFILE");
 
 export const PROFILE_MANIFEST_VERSION = 2;
-
-/**
- * The id assigned to the implicit default profile. Deterministic (not
- * random) so a manifest that has never been written still presents the
- * same id on every read.
- */
-export const DEFAULT_PROFILE_ID = "default";
 
 /**
  * Configuration stored per provider inside a profile. `method` selects the
@@ -73,7 +67,7 @@ export interface ProfileManifest {
 
 export interface ProfileSelection {
   readonly name: string;
-  readonly source: "configuration" | "stored-default" | "fallback";
+  readonly source: "configuration" | "stored-default";
 }
 
 const ProviderConfigSchema = Schema.StructWithRest(
@@ -136,28 +130,12 @@ const emptyManifest = (): ProfileManifest => ({
   profiles: {},
 });
 
-/**
- * Guarantee the default profile exists in a manifest. The synthesized
- * entry uses the deterministic {@link DEFAULT_PROFILE_ID} so it is stable
- * before the manifest is ever written; the next manifest write persists it.
- */
-const withDefaultProfile = (manifest: ProfileManifest): ProfileManifest => {
-  const name = defaultProfileName(manifest);
-  if (manifest.profiles[name] !== undefined) return manifest;
-  return {
-    ...manifest,
-    profiles: {
-      ...manifest.profiles,
-      [name]: { id: DEFAULT_PROFILE_ID, providers: {} },
-    },
-  };
-};
+export const createProfileHint = (name?: string): string =>
+  `Run \`${profileCommandHint(`alchemy profile create ${name ?? "<name>"}`)}\`.`;
 
 const profileNotFound = (name: string) =>
   new ProfileError({
-    message:
-      `Profile '${name}' does not exist. ` +
-      `Create it first with \`alchemy profile create ${name}\`.`,
+    message: `Profile '${name}' does not exist. ` + createProfileHint(name),
   });
 
 /**
@@ -172,10 +150,6 @@ export const cannotDeleteDefaultProfile = (name: string) =>
   });
 
 const PROFILE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
-
-/** The name the default selection resolves to when nothing is stored. */
-export const defaultProfileName = (manifest: ProfileManifest): string =>
-  manifest.defaultProfile ?? "default";
 
 export const validateProfileName = (
   name: string,
@@ -205,12 +179,8 @@ export interface ProfileStoreService {
     name: string,
   ) => Effect.Effect<Profile | undefined, ProfileError | PlatformError>;
   /**
-   * Like {@link getProfile}, but the default profile is implicit: if `name`
-   * is the current default selection (the stored default, or the built-in
-   * `default` fallback when none is stored) and it doesn't exist yet, it is
-   * created empty and tagged as the stored default — so a later rename keeps
-   * tracking it. Any other missing profile fails, matching `getProfile`
-   * call sites that require existence.
+   * Like {@link getProfile}, but fails with an actionable creation hint when
+   * the named profile does not exist.
    */
   readonly ensureProfile: (
     name: string,
@@ -351,17 +321,29 @@ export const ProfileStoreLive = Layer.effect(
           // are upgraded on the next `writeManifest`, which always stamps
           // the current version.
           stored.version <= PROFILE_MANIFEST_VERSION
-            ? Effect.succeed({
-                ...stored,
-                version: PROFILE_MANIFEST_VERSION,
-                defaultProfile: stored.defaultProfile,
-                profiles: Object.fromEntries(
+            ? Effect.sync(() => {
+                const profiles = Object.fromEntries(
                   Object.entries(stored.profiles).map(([name, value]) => [
                     name,
                     normalizeProfile(name, value),
                   ]),
-                ),
-              } satisfies ProfileManifest)
+                );
+                // Older manifests may predate an explicit selection. Preserve
+                // the formerly implicit `default` profile when present;
+                // otherwise use the first stored profile, matching create's
+                // first-profile-wins rule. An empty manifest stays empty.
+                const defaultProfile =
+                  stored.defaultProfile ??
+                  (profiles.default !== undefined
+                    ? "default"
+                    : Object.keys(profiles)[0]);
+                return {
+                  ...stored,
+                  version: PROFILE_MANIFEST_VERSION,
+                  defaultProfile,
+                  profiles,
+                } satisfies ProfileManifest;
+              })
             : Effect.fail(
                 new ProfileError({
                   message:
@@ -373,9 +355,6 @@ export const ProfileStoreLive = Layer.effect(
         Effect.catchReason("PlatformError", "NotFound", () =>
           Effect.succeed(emptyManifest()),
         ),
-        // The default profile always exists from the reader's perspective;
-        // the synthesized entry is persisted by the next manifest write.
-        Effect.map(withDefaultProfile),
       );
     });
 
@@ -389,7 +368,7 @@ export const ProfileStoreLive = Layer.effect(
               writeFileAtomic(
                 fs,
                 manifestPath,
-                JSON.stringify(withDefaultProfile(config), null, 2),
+                JSON.stringify(config, null, 2),
                 0o600,
               ),
             ),
@@ -422,8 +401,6 @@ export const ProfileStoreLive = Layer.effect(
         Effect.flatMap(() => readManifest),
         Effect.flatMap(
           (manifest): Effect.Effect<Profile, ProfileError | PlatformError> => {
-            // `readManifest` guarantees the default profile, so the only
-            // missing case left is an explicitly named non-default profile.
             const existing = manifest.profiles[name];
             return existing !== undefined
               ? Effect.succeed(existing)
@@ -449,6 +426,11 @@ export const ProfileStoreLive = Layer.effect(
                     Effect.flatMap((id) =>
                       writeManifest({
                         ...manifest,
+                        defaultProfile:
+                          manifest.defaultProfile ??
+                          (Object.keys(manifest.profiles).length === 0
+                            ? name
+                            : undefined),
                         profiles: {
                           ...manifest.profiles,
                           [name]: { id, providers: {} },
@@ -505,12 +487,8 @@ export const ProfileStoreLive = Layer.effect(
                   const { [name]: renamed, ...remaining } = manifest.profiles;
                   const updated: ProfileManifest = {
                     ...manifest,
-                    // Renaming the default selection re-points the tag —
-                    // including the implicit `default` on manifests that
-                    // never stored one — so the renamed profile is still
-                    // treated as the default.
                     defaultProfile:
-                      defaultProfileName(manifest) === name
+                      manifest.defaultProfile === name
                         ? newName
                         : manifest.defaultProfile,
                     profiles: { ...remaining, [newName]: renamed! },
@@ -601,7 +579,11 @@ export const ProfileStoreLive = Layer.effect(
         const name = yield* validateProfileName(manifest.defaultProfile);
         return { name, source: "stored-default" as const };
       }
-      return { name: "default", source: "fallback" as const };
+      return yield* Effect.fail(
+        new ProfileError({
+          message: `No profiles configured. ${createProfileHint()}`,
+        }),
+      );
     });
 
     const deleteProfile = (name: string) =>
@@ -614,7 +596,7 @@ export const ProfileStoreLive = Layer.effect(
               if (!(name in manifest.profiles)) {
                 return Effect.succeed(false);
               }
-              if (name === defaultProfileName(manifest)) {
+              if (name === manifest.defaultProfile) {
                 return Effect.fail(cannotDeleteDefaultProfile(name));
               }
               const { [name]: _removed, ...profiles } = manifest.profiles;
@@ -657,7 +639,7 @@ export const ProfileStoreLive = Layer.effect(
           new AuthError({
             message:
               `No credentials configured for '${auth.name}' in profile '${profileName}'. ` +
-              `Run \`alchemy profile edit ${profileName} --add ${auth.name}\` to connect it.`,
+              `Run \`${profileCommandHint(`alchemy profile edit ${profileName} --add ${auth.name}`)}\` to connect it.`,
           }),
         );
       });
@@ -719,7 +701,6 @@ export const resolveProviderConfig = <
       };
     }
     const profile = yield* ProfileStore;
-    const selection = yield* profile.current;
     // Outside CI, explicitly exported provider variables beat an
     // *implicitly* selected profile: `CLOUDFLARE_API_TOKEN` in the current
     // shell is a more direct instruction than the stored default. Selecting
@@ -727,15 +708,24 @@ export const resolveProviderConfig = <
     // profile's authority and the variables are ignored. Detection is on
     // `process.env` only — values that exist solely in an `--env-file` are
     // CI configuration, not an explicit local override.
+    const configuredProfile = yield* Config.option(ALCHEMY_PROFILE).pipe(
+      Effect.mapError(
+        (cause) =>
+          new ProfileError({
+            message: "Could not resolve ALCHEMY_PROFILE.",
+            cause,
+          }),
+      ),
+    );
     if (
-      selection.source !== "configuration" &&
+      Option.isNone(configuredProfile) &&
       auth.readEnvironment !== undefined
     ) {
       const used = yield* Effect.sync(() =>
         presentEnvironment(auth.environment, process.env),
       );
       if (used !== undefined) {
-        yield* warnEnvironmentCredentials(providerName, used, selection.name);
+        yield* warnEnvironmentCredentials(providerName, used);
         return {
           auth,
           profileName: undefined,
@@ -745,6 +735,7 @@ export const resolveProviderConfig = <
         };
       }
     }
+    const selection = yield* profile.current;
     const profileName = selection.name;
     const config = yield* profile.loadProviderConfig(auth, profileName);
     return {
@@ -765,14 +756,13 @@ export const resolveProviderConfig = <
 const warnEnvironmentCredentials = (
   provider: string,
   used: ReadonlyArray<string>,
-  profileName: string,
 ) =>
   Effect.gen(function* () {
     if (yield* SuppressMissingProviderConfig) return;
     yield* Console.warn(
       `${provider}: using credentials from environment variables (${used.join(", ")}) — ` +
-        `profile '${profileName}' was not used. Pass --profile ${profileName} (or unset ` +
-        "the variables) to use the profile's stored credentials.",
+        "the stored default profile was not used. Pass --profile <name> (or unset " +
+        "the variables) to use stored profile credentials.",
     );
   });
 

@@ -100,7 +100,10 @@ const listCommand = Command.make(
     Effect.fn(function* ({ envFile }) {
       const profiles = yield* ProfileStore;
       const manifest = yield* profiles.readManifest;
-      const activeProfile = yield* resolveProfileName(envFile, undefined);
+      const activeProfile =
+        Object.keys(manifest.profiles).length === 0
+          ? ""
+          : yield* resolveProfileName(envFile, undefined);
       const entries = listEntries(manifest, activeProfile);
       const cli = yield* CliKit.CliKit;
       if (cli.terminal.input) {

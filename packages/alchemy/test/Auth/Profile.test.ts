@@ -6,7 +6,6 @@ import {
 } from "@/Auth/AuthProvider.ts";
 import {
   configFilePath,
-  DEFAULT_PROFILE_ID,
   PROFILE_MANIFEST_VERSION,
   ProfileError,
   ProfileStore,
@@ -168,30 +167,24 @@ it.live(
 );
 
 it.live(
-  "the default profile always exists with the stable default id",
+  "does not create an implicit default profile",
   () =>
     withTempHome(
       Effect.gen(function* () {
         const profile = yield* ProfileStore;
-        // No manifest on disk at all — the default must still be there.
         const manifest = yield* profile.readManifest;
-        expect(manifest.profiles.default).toBeDefined();
-        expect(manifest.profiles.default!.id).toBe(DEFAULT_PROFILE_ID);
-        expect(manifest.profiles.default!.providers).toEqual({});
-        // Stable across reads even before anything is persisted.
-        const again = yield* profile.readManifest;
-        expect(again.profiles.default!.id).toBe(DEFAULT_PROFILE_ID);
-        // And ensureProfile resolves it without explicit creation.
-        expect((yield* profile.ensureProfile("default")).id).toBe(
-          DEFAULT_PROFILE_ID,
-        );
+        expect(manifest.profiles).toEqual({});
+        expect(manifest.defaultProfile).toBeUndefined();
+        const error = yield* profile.ensureProfile("default").pipe(Effect.flip);
+        expect(error).toBeInstanceOf(ProfileError);
+        expect((error as ProfileError).message).toContain("profile create");
       }),
     ),
   { exclusive: true },
 );
 
 it.live(
-  "profile ids survive renames and the first write persists the default",
+  "the first created profile becomes the default and survives a rename",
   () =>
     withTempHome(
       Effect.gen(function* () {
@@ -200,20 +193,22 @@ it.live(
         yield* profile.createProfile("work");
         const created = (yield* profile.readManifest).profiles.work!;
         expect(created.id).not.toBe("");
+        expect((yield* profile.readManifest).defaultProfile).toBe("work");
 
         yield* profile.renameProfile("work", "job");
         const manifest = yield* profile.readManifest;
         expect(manifest.profiles.work).toBeUndefined();
         expect(manifest.profiles.job!.id).toBe(created.id);
+        expect(manifest.defaultProfile).toBe("job");
 
-        // The write that created "work" also persisted the synthesized
-        // default profile with its stable id.
         const raw = JSON.parse(yield* fs.readFileString(configFilePath())) as {
           version: number;
+          defaultProfile?: string;
           profiles: Record<string, { id: string }>;
         };
         expect(raw.version).toBe(PROFILE_MANIFEST_VERSION);
-        expect(raw.profiles.default!.id).toBe(DEFAULT_PROFILE_ID);
+        expect(raw.defaultProfile).toBe("job");
+        expect(raw.profiles.default).toBeUndefined();
       }),
     ),
   { exclusive: true },
@@ -250,7 +245,8 @@ it.live(
           method: "oauth",
           scopes: ["d1.write"],
         });
-        expect(manifest.profiles.default).toBeDefined();
+        expect(manifest.profiles.default).toBeUndefined();
+        expect(manifest.defaultProfile).toBe("legacy");
 
         // A write upgrades the version but keeps unknown top-level keys.
         yield* profile.setDefaultProfile("legacy");
@@ -259,6 +255,32 @@ it.live(
         ) as Record<string, unknown>;
         expect(raw.version).toBe(PROFILE_MANIFEST_VERSION);
         expect(raw.futureField).toEqual({ anything: true });
+      }),
+    ),
+  { exclusive: true },
+);
+
+it.live(
+  "migrates an existing profile named default into the stored selection",
+  () =>
+    withTempHome(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const profile = yield* ProfileStore;
+        yield* fs.makeDirectory(path.dirname(configFilePath()), {
+          recursive: true,
+        });
+        yield* fs.writeFileString(
+          configFilePath(),
+          JSON.stringify({
+            version: 1,
+            profiles: { default: {}, work: {} },
+          }),
+        );
+
+        const manifest = yield* profile.readManifest;
+        expect(manifest.defaultProfile).toBe("default");
+        expect((yield* profile.current).name).toBe("default");
       }),
     ),
   { exclusive: true },
@@ -353,7 +375,7 @@ it.effect("resolves the profile from env files and --profile overrides", () =>
 );
 
 it.live(
-  "explicitly exported provider variables win over the implicit profile",
+  "explicitly exported provider variables work without a profile",
   () =>
     withTempHome(
       Effect.gen(function* () {
@@ -378,8 +400,8 @@ it.live(
         const error = yield* resolveProviderConfig(ENV_PROVIDER).pipe(
           Effect.flip,
         );
-        expect(error).toBeInstanceOf(AuthError);
-        expect((error as AuthError).message).toContain("--add");
+        expect(error).toBeInstanceOf(ProfileError);
+        expect((error as ProfileError).message).toContain("profile create");
       }),
       { ALCHEMY_PROFILE: "default" },
     ),

@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 
-import { defaultProfileName, ProfileStore } from "../../../Auth/Profile.ts";
+import { ProfileStore } from "../../../Auth/Profile.ts";
 import * as CliKit from "../../../Cli/CliKit/index.ts";
 import { resolveProfileName } from "../../../Cli/ProfileSelection.ts";
 
@@ -49,8 +49,11 @@ export const profileHub = Effect.fn(function* (options: {
   // Alphabetical — matches the tab order.
   const computeEntries = Effect.gen(function* () {
     const manifest = yield* profiles.readManifest;
-    const activeProfile = yield* resolveProfileName(envFile, undefined);
-    const defaultProfile = defaultProfileName(manifest);
+    const activeProfile =
+      Object.keys(manifest.profiles).length === 0
+        ? undefined
+        : yield* resolveProfileName(envFile, undefined);
+    const defaultProfile = manifest.defaultProfile;
     return Object.keys(manifest.profiles)
       .sort((a, b) => a.localeCompare(b))
       .map((name) => ({
@@ -65,8 +68,6 @@ export const profileHub = Effect.fn(function* (options: {
     isDefault: boolean;
   }> = [];
 
-  // The store guarantees the default profile exists, so the dashboard
-  // always has at least one row to land on.
   const { runProfileDashboardSession } = yield* Effect.promise(
     () => import("../../views/ProfileDashboard.tsx"),
   );

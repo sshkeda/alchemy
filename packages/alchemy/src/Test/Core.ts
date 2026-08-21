@@ -51,7 +51,7 @@ export interface MakeOptions<ROut = any> {
   providers: Layer.Layer<ROut, never, StackServices>;
   /** State store for top-level `deploy(Stack)` / `destroy(Stack)`; defaults to {@link State.localState}. */
   state?: Layer.Layer<State.State, never, StackServices>;
-  /** Override the current profile; otherwise resolved from env, stored default, or fallback. */
+  /** Override the current profile; otherwise resolved from env or the stored default. */
   profile?: string;
   /** Default stage for deploy/destroy (default `"test"`). */
   stage?: string;

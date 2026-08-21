@@ -36,3 +36,7 @@ export const isNonInteractive = (): boolean => {
     return true;
   return false;
 };
+
+/** Prefer the profile dashboard when this process can own a TUI screen. */
+export const profileCommandHint = (nonInteractiveCommand: string): string =>
+  isNonInteractive() ? nonInteractiveCommand : "alchemy profile";

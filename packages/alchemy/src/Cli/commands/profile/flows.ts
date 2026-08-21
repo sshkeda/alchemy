@@ -13,7 +13,6 @@ import { CredentialsStore } from "../../../Auth/Credentials.ts";
 import { withProfileCredentialsLock } from "../../../Auth/Lock.ts";
 import {
   cannotDeleteDefaultProfile,
-  defaultProfileName,
   ProfileError,
   ProfileStore,
   SuppressMissingProviderConfig,
@@ -284,7 +283,7 @@ export const deleteProfileFlow = Effect.fn(function* (options: {
   }
   // The store enforces this too, but failing before rendering
   // credentials and prompting for confirmation is friendlier.
-  if (name === defaultProfileName(manifest)) {
+  if (name === manifest.defaultProfile) {
     return yield* Effect.fail(cannotDeleteDefaultProfile(name));
   }
 
@@ -362,8 +361,6 @@ export const editProfileFlow = Effect.fn(function* (options: {
   const { selectedProfile, add, reconfigure, remove, envFile, main } = options;
   const printSummary = options.printSummary ?? true;
   const profiles = yield* ProfileStore;
-  // The default profile always exists; only explicitly named non-default
-  // profiles must have been created first.
   let stored = yield* profiles.ensureProfile(selectedProfile);
 
   const authProviders = yield* collectAuthProviders({

@@ -128,7 +128,7 @@ function ProfileList({
       {profiles.length === 0 ? (
         <Gutter>
           <Text tone="muted">
-            {"No profiles configured. Run `alchemy profile create <name>`."}
+            {"No profiles configured. Run `alchemy profile` to create one."}
           </Text>
         </Gutter>
       ) : (
