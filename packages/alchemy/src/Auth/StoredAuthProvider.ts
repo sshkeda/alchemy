@@ -251,16 +251,18 @@ export const makeStoredAuthProvider = <Resolved>(
 
       const readStored = (profileName: string) =>
         store.read(profileName, storageKey, storedSchema).pipe(
-          Effect.flatMap((values) => {
-            if (values != null) return Effect.succeed(values);
-            return Effect.fail(
-              new NeedsReauth({
-                provider,
-                profile: profileName,
-                message: `${provider} stored credentials not found. ${refreshHint(provider, profileName)}`,
-              }),
-            );
-          }),
+          Effect.flatMap(
+            Effect.fn(function* (values) {
+              if (values != null) return values;
+              return yield* Effect.fail(
+                new NeedsReauth({
+                  provider,
+                  profile: profileName,
+                  message: `${provider} stored credentials not found. ${yield* refreshHint(provider, profileName)}`,
+                }),
+              );
+            }),
+          ),
         );
 
       const read = (profileName: string, _config: StoredAuthConfig) =>

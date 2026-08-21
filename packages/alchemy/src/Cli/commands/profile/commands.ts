@@ -414,7 +414,7 @@ const currentCommand = Command.make(
           ? "ALCHEMY_PROFILE"
           : selected.source === "stored-default"
             ? "stored default"
-            : "built-in fallback";
+            : "command line";
       const cli = yield* CliKit.CliKit;
       if (cli.terminal.input) {
         const { currentProfileNode } = yield* profileTui;

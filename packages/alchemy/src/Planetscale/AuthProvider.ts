@@ -383,99 +383,109 @@ export const PlanetscaleAuth = AuthProviderLayer<
       profileName: string,
       config: PlanetscaleAuthConfig,
     ) =>
-      Match.value(config).pipe(
-        Match.when({ method: "stored" }, () =>
-          store
-            .read(profileName, STORED_STORAGE_KEY, PlanetscaleStoredCredentials)
-            .pipe(
-              Effect.flatMap((creds) =>
-                creds == null
-                  ? Effect.fail(
-                      new NeedsReauth({
-                        provider: PLANETSCALE_AUTH_PROVIDER_NAME,
-                        profile: profileName,
-                        message: `Planetscale stored credentials not found. ${refreshHint(PLANETSCALE_AUTH_PROVIDER_NAME, profileName)}`,
-                      }),
-                    )
-                  : Effect.succeed({
-                      type: "apiToken" as const,
-                      tokenId: creds.tokenId,
-                      token: creds.token,
-                      organization: creds.organization,
-                      source: {
-                        type: "stored" as const,
-                        details: undefined,
-                      },
-                    } satisfies PlanetscaleResolvedCredentials),
-              ),
-            ),
-        ),
-        Match.when({ method: "oauth" }, (cfg) =>
-          Effect.gen(function* () {
-            const creds = yield* store.read(
-              profileName,
-              OAUTH_STORAGE_KEY,
-              OAuthClient.OAuthCredentials,
-            );
-            if (creds == null || creds.type !== "oauth") {
-              return yield* Effect.fail(
-                new NeedsReauth({
-                  provider: PLANETSCALE_AUTH_PROVIDER_NAME,
-                  profile: profileName,
-                  message: `Planetscale OAuth credentials not found. ${refreshHint(PLANETSCALE_AUTH_PROVIDER_NAME, profileName)}`,
-                }),
-              );
-            }
-            if (!OAuthClient.usesCurrentClient(creds)) {
-              yield* store.delete(profileName, OAUTH_STORAGE_KEY);
-              return yield* Effect.fail(
-                new NeedsReauth({
-                  provider: PLANETSCALE_AUTH_PROVIDER_NAME,
-                  profile: profileName,
-                  message: `Planetscale OAuth credentials for profile '${profileName}' were issued to an incompatible OAuth client and have been removed. ${refreshHint(PLANETSCALE_AUTH_PROVIDER_NAME, profileName)}`,
-                }),
-              );
-            }
-            // Refresh proactively if the token has expired (or is within
-            // 10s of expiring). Persist the refreshed creds so subsequent
-            // resolves don't repeat the round-trip.
-            const now = yield* Clock.currentTimeMillis;
-            const fresh =
-              creds.expires > now + 10_000
-                ? creds
-                : yield* OAuthClient.refresh(creds).pipe(
-                    // Only the refresh round-trip maps to NeedsReauth — a
-                    // failed persist afterwards is a local I/O AuthError and
-                    // passes through untouched.
-                    Effect.mapError(
-                      (e) =>
+      Effect.gen(function* () {
+        const reauth = yield* refreshHint(
+          PLANETSCALE_AUTH_PROVIDER_NAME,
+          profileName,
+        );
+        return yield* Match.value(config).pipe(
+          Match.when({ method: "stored" }, () =>
+            store
+              .read(
+                profileName,
+                STORED_STORAGE_KEY,
+                PlanetscaleStoredCredentials,
+              )
+              .pipe(
+                Effect.flatMap((creds) =>
+                  creds == null
+                    ? Effect.fail(
                         new NeedsReauth({
                           provider: PLANETSCALE_AUTH_PROVIDER_NAME,
                           profile: profileName,
-                          message: `Planetscale OAuth refresh failed. ${refreshHint(PLANETSCALE_AUTH_PROVIDER_NAME, profileName)}`,
-                          cause: e,
+                          message: `Planetscale stored credentials not found. ${reauth}`,
                         }),
-                    ),
-                    Effect.tap((refreshed) =>
-                      store.write(
-                        profileName,
-                        OAUTH_STORAGE_KEY,
-                        OAuthClient.OAuthCredentials,
-                        refreshed,
+                      )
+                    : Effect.succeed({
+                        type: "apiToken" as const,
+                        tokenId: creds.tokenId,
+                        token: creds.token,
+                        organization: creds.organization,
+                        source: {
+                          type: "stored" as const,
+                          details: undefined,
+                        },
+                      } satisfies PlanetscaleResolvedCredentials),
+                ),
+              ),
+          ),
+          Match.when({ method: "oauth" }, (cfg) =>
+            Effect.gen(function* () {
+              const creds = yield* store.read(
+                profileName,
+                OAUTH_STORAGE_KEY,
+                OAuthClient.OAuthCredentials,
+              );
+              if (creds == null || creds.type !== "oauth") {
+                return yield* Effect.fail(
+                  new NeedsReauth({
+                    provider: PLANETSCALE_AUTH_PROVIDER_NAME,
+                    profile: profileName,
+                    message: `Planetscale OAuth credentials not found. ${reauth}`,
+                  }),
+                );
+              }
+              if (!OAuthClient.usesCurrentClient(creds)) {
+                yield* store.delete(profileName, OAUTH_STORAGE_KEY);
+                return yield* Effect.fail(
+                  new NeedsReauth({
+                    provider: PLANETSCALE_AUTH_PROVIDER_NAME,
+                    profile: profileName,
+                    message: `Planetscale OAuth credentials for profile '${profileName}' were issued to an incompatible OAuth client and have been removed. ${reauth}`,
+                  }),
+                );
+              }
+              // Refresh proactively if the token has expired (or is within
+              // 10s of expiring). Persist the refreshed creds so subsequent
+              // resolves don't repeat the round-trip.
+              const now = yield* Clock.currentTimeMillis;
+              const fresh =
+                creds.expires > now + 10_000
+                  ? creds
+                  : yield* OAuthClient.refresh(creds).pipe(
+                      // Only the refresh round-trip maps to NeedsReauth — a
+                      // failed persist afterwards is a local I/O AuthError and
+                      // passes through untouched.
+                      Effect.mapError(
+                        (e) =>
+                          new NeedsReauth({
+                            provider: PLANETSCALE_AUTH_PROVIDER_NAME,
+                            profile: profileName,
+                            message: `Planetscale OAuth refresh failed. ${reauth}`,
+                            cause: e,
+                          }),
                       ),
-                    ),
-                  );
-            return {
-              type: "oauth" as const,
-              accessToken: fresh.access,
-              expires: fresh.expires,
-              organization: cfg.organization,
-              source: { type: "oauth" as const },
-            } satisfies PlanetscaleResolvedCredentials;
-          }),
-        ),
-        Match.exhaustive,
-      );
+                      Effect.tap((refreshed) =>
+                        store.write(
+                          profileName,
+                          OAUTH_STORAGE_KEY,
+                          OAuthClient.OAuthCredentials,
+                          refreshed,
+                        ),
+                      ),
+                    );
+              return {
+                type: "oauth" as const,
+                accessToken: fresh.access,
+                expires: fresh.expires,
+                organization: cfg.organization,
+                source: { type: "oauth" as const },
+              } satisfies PlanetscaleResolvedCredentials;
+            }),
+          ),
+          Match.exhaustive,
+        );
+      });
 
     const logout = (profileName: string, config: PlanetscaleAuthConfig) =>
       Match.value(config).pipe(

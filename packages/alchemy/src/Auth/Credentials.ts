@@ -6,6 +6,7 @@ import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import path from "pathe";
 import { writeFileAtomic } from "../Util/AtomicFile.ts";
+import { profileCommandHint } from "../Util/interactive.ts";
 import { AuthError } from "./AuthProvider.ts";
 import { profileCredentialsDirPath } from "./Paths.ts";
 import { validateProfileName } from "./Profile.ts";
@@ -87,11 +88,16 @@ export const CredentialsStoreLive = Layer.effect(
               }),
           ),
         );
+        const command = yield* profileCommandHint(
+          `alchemy profile edit ${profile} --reconfigure ${provider}`,
+        );
         return yield* Schema.decodeUnknownEffect(schema)(json).pipe(
           Effect.mapError(
             (cause) =>
               new AuthError({
-                message: `Stored credentials at '${filePath}' do not match the expected shape. Run: alchemy profile edit ${profile} --reconfigure <provider>`,
+                message:
+                  `Stored credentials at '${filePath}' do not match the expected shape. ` +
+                  `Run \`${command}\` to replace them.`,
                 cause,
               }),
           ),

@@ -61,7 +61,12 @@ export class NeedsReauth extends Schema.TaggedError<NeedsReauth>()(
  * in one place when the CLI surface changes.
  */
 export const refreshHint = (provider: string, profileName: string) =>
-  `Run: alchemy profile refresh ${profileName} --provider ${provider}`;
+  Effect.map(
+    profileCommandHint(
+      `alchemy profile refresh ${profileName} --provider ${provider}`,
+    ),
+    (command) => `Run \`${command}\`.`,
+  );
 
 export class AuthProviders extends Context.Service<
   AuthProviders,
@@ -438,18 +443,25 @@ export const AuthProvider =
         environment,
         configSchema: service.configSchema,
         decodeConfig: (profileName, config) =>
-          Schema.decodeUnknownEffect(service.configSchema)(config).pipe(
-            Effect.mapError(
-              (cause) =>
-                new AuthError({
-                  message:
-                    `Stored ${name} configuration in profile '${profileName}' is not valid ` +
-                    `for this version of alchemy (method '${config.method}'). ` +
-                    `Run \`${profileCommandHint(`alchemy profile edit ${profileName} --reconfigure ${name}`)}\` to fix it.`,
-                  cause,
-                }),
-            ),
-          ),
+          Effect.gen(function* () {
+            const command = yield* profileCommandHint(
+              `alchemy profile edit ${profileName} --reconfigure ${name}`,
+            );
+            return yield* Schema.decodeUnknownEffect(service.configSchema)(
+              config,
+            ).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new AuthError({
+                    message:
+                      `Stored ${name} configuration in profile '${profileName}' is not valid ` +
+                      `for this version of alchemy (method '${config.method}'). ` +
+                      `Run \`${command}\` to fix it.`,
+                    cause,
+                  }),
+              ),
+            );
+          }),
       };
 
       providers[name] = provider;

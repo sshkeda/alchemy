@@ -30,7 +30,7 @@ mid-bootstrap.
 
 | Option                 | Description                                                                                                                          |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `--profile <name>`     | Alchemy auth profile (defaults to `$ALCHEMY_PROFILE`, the stored default, or `default`). Determines which `~/.alchemy/profiles.json` entry is used.       |
+| `--profile <name>`     | Alchemy auth profile (defaults to `$ALCHEMY_PROFILE` or the stored default). Determines which `~/.alchemy/profiles.json` entry is used.                  |
 | `--force`              | Force a full redeploy even if the worker already exists. Without this flag, an existing worker is **adopted** and only its credentials are refreshed. |
 | `--worker-name <name>` | Override the default state-store worker name. Advanced; only needed if you run multiple state stores per Cloudflare account.         |
 | `--env-file <path>`    | Load environment variables from a file                                                                                               |
@@ -155,7 +155,7 @@ default scope set; existing profiles need to re-run
 | `--limit <n>`          | Number of log entries to fetch (default: 100). Ignored with `--tail`.                                        |
 | `--since <time>`       | Fetch logs since this time — a duration (`1h`, `30m`, `2d`) or ISO date                                       |
 | `--worker-name <name>` | Override the default state-store worker name. Only needed if you run multiple state stores per account.       |
-| `--profile <name>`     | Alchemy auth profile (defaults to `$ALCHEMY_PROFILE`, the stored default, or `default`)                                           |
+| `--profile <name>`     | Alchemy auth profile (defaults to `$ALCHEMY_PROFILE` or the stored default)                                    |
 | `--env-file <path>`    | Load environment variables from a file                                                                        |
 
 ```sh

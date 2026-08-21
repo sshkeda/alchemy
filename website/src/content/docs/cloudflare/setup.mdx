@@ -79,10 +79,10 @@ are available, so the menu matches the providers you actually use.
 
 ## Profiles
 
-A profile is a named bundle of credentials. Every command uses the
-profile named `default` unless you pass `--profile <name>` or set
-`$ALCHEMY_PROFILE` — handy for separating work and personal
-accounts, or staging and prod credentials:
+A profile is a named bundle of credentials. The first profile you create is
+the default unless you select another with `alchemy profile set-default`.
+Pass `--profile <name>` or set `$ALCHEMY_PROFILE` to select one explicitly —
+handy for separating work and personal accounts, or staging and prod credentials:
 
 ```sh
 # Log into a separate profile

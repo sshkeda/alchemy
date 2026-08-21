@@ -38,7 +38,7 @@ Each command has its own page: [deploy](/cli/deploy), [plan](/cli/plan), [destro
 | Option              | Description                                                                                                                              |
 | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | `--stage <name>`    | Stage to target. Falls back to the `stage` env config, then `dev_$USER`. Must match `[a-z0-9]+([-_a-z0-9]+)*` (case-insensitive).        |
-| `--profile <name>`  | Auth profile from `~/.alchemy/profiles.json`. Overrides `$ALCHEMY_PROFILE`, the stored default, and the built-in `default`.             |
+| `--profile <name>`  | Auth profile from `~/.alchemy/profiles.json`. Overrides `$ALCHEMY_PROFILE` and the stored default.                                      |
 | `--env-file <path>` | File to load environment variables from. Defaults to `.env`.                                                                             |
 | `--yes`             | Yes to all prompts.                                                                                                                       |
 | `--no-input`        | Disable prompts and the interactive TUI. Commands that would need input fail instead of hanging.                                          |

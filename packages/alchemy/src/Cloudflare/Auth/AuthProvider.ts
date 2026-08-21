@@ -32,6 +32,7 @@ import {
 } from "../../Auth/Env.ts";
 import { browserOAuth } from "../../Auth/BrowserOAuth.ts";
 import * as CliKit from "../../Cli/CliKit/index.ts";
+import { profileCommandHint } from "../../Util/interactive.ts";
 import { CREDENTIALS_FILE as STATE_STORE_CREDENTIALS_FILE } from "../StateStore/CredentialsFile.ts";
 import * as OAuthClient from "./OAuthClient.ts";
 import {
@@ -399,113 +400,123 @@ export const CloudflareAuth = AuthProviderLayer<
       profileName: string,
       config: CloudflareAuthConfig,
     ) =>
-      Match.value(config).pipe(
-        Match.when({ method: "stored" }, () =>
-          store
-            .read(profileName, STORED_STORAGE_KEY, CloudflareStoredCredentials)
-            .pipe(
-              Effect.flatMap(
-                Effect.fn(function* (creds) {
-                  if (creds == null) {
-                    return yield* Effect.fail(
-                      new NeedsReauth({
-                        provider: CLOUDFLARE_AUTH_PROVIDER_NAME,
-                        profile: profileName,
-                        message: `Cloudflare stored credentials not found. ${refreshHint(CLOUDFLARE_AUTH_PROVIDER_NAME, profileName)}`,
-                      }),
-                    );
-                  }
-                  const accountId = yield* validateAccountId(
-                    creds.accountId,
-                    `stored for profile '${profileName}'`,
-                  );
-                  return Match.value(creds).pipe(
-                    Match.when({ type: "apiToken" }, (c) => ({
-                      type: "apiToken" as const,
-                      apiToken: c.apiToken,
-                      accountId,
-                      source: { type: "stored" as const },
-                    })),
-                    Match.when({ type: "apiKey" }, (c) => ({
-                      type: "apiKey" as const,
-                      apiKey: c.apiKey,
-                      email: c.email,
-                      accountId,
-                      source: { type: "stored" as const },
-                    })),
-                    Match.exhaustive,
-                  );
-                }),
-              ),
-            ),
-        ),
-        Match.when({ method: "oauth" }, (cfg) =>
-          Effect.gen(function* () {
-            const accountId = yield* validateAccountId(
-              cfg.accountId,
-              `configured for profile '${profileName}'`,
-            );
-            const creds = yield* store.read(
-              profileName,
-              OAUTH_STORAGE_KEY,
-              OAuthClient.OAuthCredentials,
-            );
-            if (creds == null || creds.type !== "oauth") {
-              return yield* Effect.fail(
-                new NeedsReauth({
-                  provider: CLOUDFLARE_AUTH_PROVIDER_NAME,
-                  profile: profileName,
-                  message: `Cloudflare OAuth credentials not found. ${refreshHint(CLOUDFLARE_AUTH_PROVIDER_NAME, profileName)}`,
-                }),
-              );
-            }
-            if (!OAuthClient.usesCurrentClient(creds)) {
-              yield* store.delete(profileName, OAUTH_STORAGE_KEY);
-              return yield* Effect.fail(
-                new NeedsReauth({
-                  provider: CLOUDFLARE_AUTH_PROVIDER_NAME,
-                  profile: profileName,
-                  message: `Cloudflare OAuth credentials for profile '${profileName}' were issued to an incompatible OAuth client and have been removed. ${refreshHint(CLOUDFLARE_AUTH_PROVIDER_NAME, profileName)}`,
-                }),
-              );
-            }
-            // Refresh proactively if the token has expired (or is within
-            // 10s of expiring). Persist the refreshed creds so subsequent
-            // resolves don't repeat the round-trip.
-            const now = yield* Clock.currentTimeMillis;
-            const fresh =
-              creds.expires > now + 10_000
-                ? creds
-                : yield* OAuthClient.refresh(creds).pipe(
-                    Effect.tap((refreshed) =>
-                      store.write(
-                        profileName,
-                        OAUTH_STORAGE_KEY,
-                        OAuthClient.OAuthCredentials,
-                        refreshed,
-                      ),
-                    ),
-                    Effect.mapError(
-                      (e) =>
+      Effect.gen(function* () {
+        const reauth = yield* refreshHint(
+          CLOUDFLARE_AUTH_PROVIDER_NAME,
+          profileName,
+        );
+        return yield* Match.value(config).pipe(
+          Match.when({ method: "stored" }, () =>
+            store
+              .read(
+                profileName,
+                STORED_STORAGE_KEY,
+                CloudflareStoredCredentials,
+              )
+              .pipe(
+                Effect.flatMap(
+                  Effect.fn(function* (creds) {
+                    if (creds == null) {
+                      return yield* Effect.fail(
                         new NeedsReauth({
                           provider: CLOUDFLARE_AUTH_PROVIDER_NAME,
                           profile: profileName,
-                          message: `Cloudflare OAuth refresh failed. ${refreshHint(CLOUDFLARE_AUTH_PROVIDER_NAME, profileName)}`,
-                          cause: e,
+                          message: `Cloudflare stored credentials not found. ${reauth}`,
                         }),
-                    ),
-                  );
-            return {
-              type: "oauth" as const,
-              accessToken: fresh.access,
-              expires: fresh.expires,
-              accountId,
-              source: { type: "oauth" as const },
-            };
-          }),
-        ),
-        Match.exhaustive,
-      );
+                      );
+                    }
+                    const accountId = yield* validateAccountId(
+                      creds.accountId,
+                      `stored for profile '${profileName}'`,
+                    );
+                    return Match.value(creds).pipe(
+                      Match.when({ type: "apiToken" }, (c) => ({
+                        type: "apiToken" as const,
+                        apiToken: c.apiToken,
+                        accountId,
+                        source: { type: "stored" as const },
+                      })),
+                      Match.when({ type: "apiKey" }, (c) => ({
+                        type: "apiKey" as const,
+                        apiKey: c.apiKey,
+                        email: c.email,
+                        accountId,
+                        source: { type: "stored" as const },
+                      })),
+                      Match.exhaustive,
+                    );
+                  }),
+                ),
+              ),
+          ),
+          Match.when({ method: "oauth" }, (cfg) =>
+            Effect.gen(function* () {
+              const accountId = yield* validateAccountId(
+                cfg.accountId,
+                `configured for profile '${profileName}'`,
+              );
+              const creds = yield* store.read(
+                profileName,
+                OAUTH_STORAGE_KEY,
+                OAuthClient.OAuthCredentials,
+              );
+              if (creds == null || creds.type !== "oauth") {
+                return yield* Effect.fail(
+                  new NeedsReauth({
+                    provider: CLOUDFLARE_AUTH_PROVIDER_NAME,
+                    profile: profileName,
+                    message: `Cloudflare OAuth credentials not found. ${reauth}`,
+                  }),
+                );
+              }
+              if (!OAuthClient.usesCurrentClient(creds)) {
+                yield* store.delete(profileName, OAUTH_STORAGE_KEY);
+                return yield* Effect.fail(
+                  new NeedsReauth({
+                    provider: CLOUDFLARE_AUTH_PROVIDER_NAME,
+                    profile: profileName,
+                    message: `Cloudflare OAuth credentials for profile '${profileName}' were issued to an incompatible OAuth client and have been removed. ${reauth}`,
+                  }),
+                );
+              }
+              // Refresh proactively if the token has expired (or is within
+              // 10s of expiring). Persist the refreshed creds so subsequent
+              // resolves don't repeat the round-trip.
+              const now = yield* Clock.currentTimeMillis;
+              const fresh =
+                creds.expires > now + 10_000
+                  ? creds
+                  : yield* OAuthClient.refresh(creds).pipe(
+                      Effect.tap((refreshed) =>
+                        store.write(
+                          profileName,
+                          OAUTH_STORAGE_KEY,
+                          OAuthClient.OAuthCredentials,
+                          refreshed,
+                        ),
+                      ),
+                      Effect.mapError(
+                        (e) =>
+                          new NeedsReauth({
+                            provider: CLOUDFLARE_AUTH_PROVIDER_NAME,
+                            profile: profileName,
+                            message: `Cloudflare OAuth refresh failed. ${reauth}`,
+                            cause: e,
+                          }),
+                      ),
+                    );
+              return {
+                type: "oauth" as const,
+                accessToken: fresh.access,
+                expires: fresh.expires,
+                accountId,
+                source: { type: "oauth" as const },
+              };
+            }),
+          ),
+          Match.exhaustive,
+        );
+      });
 
     const readEnvironment = Effect.gen(function* () {
       const accountId = yield* getEnvRequired("CLOUDFLARE_ACCOUNT_ID").pipe(
@@ -618,6 +629,9 @@ export const CloudflareAuth = AuthProviderLayer<
                 OAUTH_STORAGE_KEY,
                 OAuthClient.OAuthCredentials,
               );
+              const reconfigureCommand = yield* profileCommandHint(
+                `alchemy profile edit ${profileName} --reconfigure Cloudflare`,
+              );
               // Any path that falls back to a full browser login rebuilds the
               // authorize URL from the profile's stored scopes. Those scopes
               // may predate the current OAuth client (or a catalog change), and
@@ -630,7 +644,7 @@ export const CloudflareAuth = AuthProviderLayer<
                     new AuthError({
                       message:
                         `The OAuth scopes stored for profile '${profileName}' are no longer offered by Alchemy's Cloudflare OAuth client. ` +
-                        `Run \`alchemy profile edit ${profileName} --reconfigure Cloudflare\` to pick scopes again.`,
+                        `Run \`${reconfigureCommand}\` to pick scopes again.`,
                     }),
                   );
                 }
@@ -639,7 +653,7 @@ export const CloudflareAuth = AuthProviderLayer<
                     ? Effect.void
                     : prompt.output.warning(
                         `Cloudflare: dropping ${dropped.length} stored scope${dropped.length === 1 ? "" : "s"} no longer offered by the current OAuth client (${dropped.join(", ")}). ` +
-                          `Run \`alchemy profile edit ${profileName} --reconfigure Cloudflare\` to re-pick scopes.`,
+                          `Run \`${reconfigureCommand}\` to re-pick scopes.`,
                       )
                 ).pipe(Effect.andThen(oauthLogin(profileName, valid)));
               });

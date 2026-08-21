@@ -225,9 +225,10 @@ alchemy profile set-default production
 alchemy profile current [options]
 ```
 
-Show the effective profile and why it was selected. The source is one of
-`ALCHEMY_PROFILE`, `stored default`, or `built-in fallback`. In a
-non-interactive session it prints a single `name (source)` line.
+Show the effective profile and why it was selected. The source is either
+`ALCHEMY_PROFILE` or `stored default`. If no profile exists, the command tells
+you how to create one. In a non-interactive session it prints a single
+`name (source)` line.
 
 | Option              | Description                            |
 | ------------------- | -------------------------------------- |

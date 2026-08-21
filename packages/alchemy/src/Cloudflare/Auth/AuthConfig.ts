@@ -2,6 +2,7 @@ import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import { AuthError } from "../../Auth/AuthProvider.ts";
+import { profileCommandHint } from "../../Util/interactive.ts";
 
 /** Manifest-entry schema for Cloudflare authentication. */
 export const CloudflareAuthConfigSchema = Schema.Union([
@@ -86,30 +87,34 @@ const ACCOUNT_ID_PATTERN = /^[0-9a-f]{32}$/i;
 export const validateAccountId = (
   accountId: string | undefined,
   source: string,
-): Effect.Effect<string, AuthError> => {
-  const trimmed = accountId?.trim() ?? "";
-  if (trimmed.length === 0) {
-    return Effect.fail(
-      new AuthError({
-        message:
-          `Cloudflare account ID is missing (${source}). ` +
-          "Re-run 'alchemy profile edit --reconfigure Cloudflare' and provide your account ID " +
-          "(found in the Cloudflare dashboard under Workers & Pages → Account details).",
-      }),
+): Effect.Effect<string, AuthError> =>
+  Effect.gen(function* () {
+    const trimmed = accountId?.trim() ?? "";
+    const command = yield* profileCommandHint(
+      "alchemy profile edit --reconfigure Cloudflare",
     );
-  }
-  if (!ACCOUNT_ID_PATTERN.test(trimmed)) {
-    return Effect.fail(
-      new AuthError({
-        message:
-          `'${trimmed}' is not a valid Cloudflare account ID (${source}) — expected 32 hex characters. ` +
-          "Copy the account ID from the Cloudflare dashboard (Workers & Pages → Account details) " +
-          "and re-run 'alchemy profile edit --reconfigure Cloudflare'.",
-      }),
-    );
-  }
-  return Effect.succeed(trimmed.toLowerCase());
-};
+    if (trimmed.length === 0) {
+      return yield* Effect.fail(
+        new AuthError({
+          message:
+            `Cloudflare account ID is missing (${source}). ` +
+            `Re-run \`${command}\` and provide your account ID ` +
+            "(found in the Cloudflare dashboard under Workers & Pages → Account details).",
+        }),
+      );
+    }
+    if (!ACCOUNT_ID_PATTERN.test(trimmed)) {
+      return yield* Effect.fail(
+        new AuthError({
+          message:
+            `'${trimmed}' is not a valid Cloudflare account ID (${source}) — expected 32 hex characters. ` +
+            "Copy the account ID from the Cloudflare dashboard (Workers & Pages → Account details) " +
+            `and re-run \`${command}\`.`,
+        }),
+      );
+    }
+    return trimmed.toLowerCase();
+  });
 
 /** Field-level validator reusing {@link ACCOUNT_ID_PATTERN}. */
 export const validateAccountIdField = (v: string): string | undefined =>

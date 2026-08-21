@@ -23,17 +23,19 @@ Alchemy selects a profile in this order:
 1. The command's `--profile <name>` option
 2. `$ALCHEMY_PROFILE`, including values loaded from `--env-file`
 3. The profile saved by `alchemy profile set-default <name>`
-4. The built-in fallback name `default`
 
-Alchemy creates the default profile in memory and saves it on the first write.
-Profiles have stable internal ids, so renaming the default also updates its
-credential directory and keeps it selected. Other names must be created first.
-For example, `--profile prod` fails until you create `prod`.
+Profiles are always explicit. If none exist, run `alchemy profile` in an
+interactive terminal, or `alchemy profile create <name>` in a script. The first
+profile you create becomes the default; creating more profiles does not change
+it. Existing installations with a profile named `default` keep it selected
+during migration. Profiles have stable internal ids, so renaming the default
+also updates its credential directory and keeps it selected.
 
 ```sh
-alchemy profile edit
+alchemy profile create work
+alchemy profile edit work
 alchemy deploy
-# uses profile `default`, created on first use
+# uses profile `work`
 ```
 
 ## How credentials get there
@@ -48,7 +50,7 @@ To re-run that flow at any time:
 alchemy profile edit
 
 # Re-configure one account directly
-alchemy profile edit default --reconfigure Cloudflare
+alchemy profile edit work --reconfigure Cloudflare
 
 # Log into a separate profile
 alchemy profile create prod
@@ -63,7 +65,7 @@ selected authentication method, account, and scopes:
 alchemy profile refresh
 
 # Refresh only AWS SSO
-alchemy profile refresh default --provider AWS
+alchemy profile refresh work --provider AWS
 ```
 
 Alchemy refreshes supported credentials lazily. If interaction is required,
@@ -90,13 +92,13 @@ alchemy profile show prod
 Sample output:
 
 ```text
-Profile: default
+Profile: work
 
 ── AWS ──
   accessKeyId:     ASIA****
   secretAccessKey: Pj5T****
   region:          us-west-2
-  source: sso - default
+  source: sso - company
 
 ── Cloudflare ──
   accessToken: Xl06****
@@ -137,7 +139,7 @@ an implicitly selected profile:
 
 ```text
 Cloudflare: using credentials from environment variables (CLOUDFLARE_API_TOKEN,
-CLOUDFLARE_ACCOUNT_ID). Alchemy did not use profile 'default'.
+CLOUDFLARE_ACCOUNT_ID) — the stored default profile was not used.
 ```
 
 Pass `--profile <name>` or set `ALCHEMY_PROFILE` to use the profile instead.

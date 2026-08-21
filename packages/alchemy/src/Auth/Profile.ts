@@ -130,13 +130,17 @@ const emptyManifest = (): ProfileManifest => ({
   profiles: {},
 });
 
-export const createProfileHint = (name?: string): string =>
-  `Run \`${profileCommandHint(`alchemy profile create ${name ?? "<name>"}`)}\`.`;
+export const createProfileHint = (name?: string) =>
+  Effect.map(
+    profileCommandHint(`alchemy profile create ${name ?? "<name>"}`),
+    (command) => `Run \`${command}\`.`,
+  );
 
-const profileNotFound = (name: string) =>
-  new ProfileError({
-    message: `Profile '${name}' does not exist. ` + createProfileHint(name),
+const profileNotFound = Effect.fn(function* (name: string) {
+  return new ProfileError({
+    message: `Profile '${name}' does not exist. ${yield* createProfileHint(name)}`,
   });
+});
 
 /**
  * Shared by the store's locked `deleteProfile` check and the CLI's
@@ -404,7 +408,7 @@ export const ProfileStoreLive = Layer.effect(
             const existing = manifest.profiles[name];
             return existing !== undefined
               ? Effect.succeed(existing)
-              : Effect.fail(profileNotFound(name));
+              : Effect.flatMap(profileNotFound(name), Effect.fail);
           },
         ),
       );
@@ -540,7 +544,7 @@ export const ProfileStoreLive = Layer.effect(
             (manifest): Effect.Effect<void, ProfileError | PlatformError> =>
               name in manifest.profiles
                 ? writeManifest(update(manifest))
-                : Effect.fail(profileNotFound(name)),
+                : Effect.flatMap(profileNotFound(name), Effect.fail),
           ),
         ),
       );
@@ -581,7 +585,7 @@ export const ProfileStoreLive = Layer.effect(
       }
       return yield* Effect.fail(
         new ProfileError({
-          message: `No profiles configured. ${createProfileHint()}`,
+          message: `No profiles configured. ${yield* createProfileHint()}`,
         }),
       );
     });
@@ -639,7 +643,7 @@ export const ProfileStoreLive = Layer.effect(
           new AuthError({
             message:
               `No credentials configured for '${auth.name}' in profile '${profileName}'. ` +
-              `Run \`${profileCommandHint(`alchemy profile edit ${profileName} --add ${auth.name}`)}\` to connect it.`,
+              `Run \`${yield* profileCommandHint(`alchemy profile edit ${profileName} --add ${auth.name}`)}\` to connect it.`,
           }),
         );
       });

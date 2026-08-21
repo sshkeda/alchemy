@@ -97,18 +97,23 @@ const resourceLines = (demand: CredentialDemand): string =>
 export const credentialsRequired = (
   demand: CredentialDemand,
   profileName: string,
-): CredentialsRequired =>
-  new CredentialsRequired({
-    provider: demand.provider,
-    resources: demand.resources.map((r) => r.fqn),
-    reason: [...new Set(demand.resources.map((r) => r.reason))].join(", "),
-    message:
-      `${demand.provider} credentials are required, but none are configured ` +
-      `for profile '${profileName}'.\n` +
-      `These resources require ${demand.provider} credentials:\n` +
-      `${resourceLines(demand)}\n` +
-      `Run \`${profileCommandHint(`alchemy profile edit ${profileName} --add ${demand.provider}`)}\` to configure ` +
-      "credentials, or set CI=1 to use environment-variable credentials.",
+): Effect.Effect<never, CredentialsRequired> =>
+  Effect.gen(function* () {
+    const command = yield* profileCommandHint(
+      `alchemy profile edit ${profileName} --add ${demand.provider}`,
+    );
+    return yield* new CredentialsRequired({
+      provider: demand.provider,
+      resources: demand.resources.map((r) => r.fqn),
+      reason: [...new Set(demand.resources.map((r) => r.reason))].join(", "),
+      message:
+        `${demand.provider} credentials are required, but none are configured ` +
+        `for profile '${profileName}'.\n` +
+        `These resources require ${demand.provider} credentials:\n` +
+        `${resourceLines(demand)}\n` +
+        `Run \`${command}\` to configure ` +
+        "credentials, or set CI=1 to use environment-variable credentials.",
+    });
   });
 
 const bindingDemandsRemote = (

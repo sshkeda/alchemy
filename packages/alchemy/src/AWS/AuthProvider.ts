@@ -17,6 +17,7 @@ import * as Schema from "effect/Schema";
 import { ChildProcess } from "effect/unstable/process";
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner";
 import type * as HttpClient from "effect/unstable/http/HttpClient";
+import { profileCommandHint } from "../Util/interactive.ts";
 import * as NodeCrypto from "node:crypto";
 import * as NodeOs from "node:os";
 import {
@@ -413,7 +414,7 @@ export const AwsAuth = AuthProviderLayer<
             if (profile == null) {
               return yield* Effect.fail(
                 new AuthError({
-                  message: `AWS SSO profile '${ssoProfile}' was not found in ~/.aws/config. Configure it with \`aws configure sso\` first, then run \`alchemy profile refresh\` to log in.`,
+                  message: `AWS SSO profile '${ssoProfile}' was not found in ~/.aws/config. Configure it with \`aws configure sso\` first, then run \`${yield* profileCommandHint("alchemy profile refresh")}\` to log in.`,
                 }),
               );
             }
@@ -447,204 +448,212 @@ export const AwsAuth = AuthProviderLayer<
       );
 
     const resolveCredentials = (profileName: string, config: AwsAuthConfig) =>
-      Match.value(config)
-        .pipe(
-          Match.when(
-            { method: "local" },
-            Effect.fn(function* (config) {
-              const endpoint = config.endpoint ?? DEFAULT_LOCAL_ENDPOINT;
-              const autoStart =
-                config.autoStart ?? endpoint === DEFAULT_LOCAL_ENDPOINT;
-              if (autoStart) {
-                const port = yield* Effect.try({
-                  try: () =>
-                    Number.parseInt(new URL(endpoint).port, 10) ||
-                    Floci.DEFAULT_FLOCI_PORT,
-                  catch: () =>
-                    new AuthError({
-                      message: `invalid local emulator endpoint: ${endpoint}`,
-                    }),
-                });
-                yield* Floci.ensureFloci({ port }).pipe(
-                  Effect.mapError(
-                    (cause) => new AuthError({ message: cause.message, cause }),
-                  ),
-                );
-              } else if (!(yield* Floci.isServing(endpoint))) {
-                return yield* new AuthError({
-                  message: `no local AWS emulator is listening at ${endpoint}`,
-                });
-              }
-              const region = config.region ?? "us-east-1";
-              return {
-                // Fixed dummy account — emulators accept any non-empty
-                // credentials, and calling STS here would be pure overhead.
-                accountId: config.accountId ?? LOCAL_ACCOUNT_ID,
-                credentials: Effect.succeed<AwsCredentials>({
-                  accessKeyId: Redacted.make("test"),
-                  secretAccessKey: Redacted.make("test"),
-                  sessionToken: undefined,
+      Effect.gen(function* () {
+        const reauth = yield* refreshHint(AWS_AUTH_PROVIDER_NAME, profileName);
+        return yield* Match.value(config)
+          .pipe(
+            Match.when(
+              { method: "local" },
+              Effect.fn(function* (config) {
+                const endpoint = config.endpoint ?? DEFAULT_LOCAL_ENDPOINT;
+                const autoStart =
+                  config.autoStart ?? endpoint === DEFAULT_LOCAL_ENDPOINT;
+                if (autoStart) {
+                  const port = yield* Effect.try({
+                    try: () =>
+                      Number.parseInt(new URL(endpoint).port, 10) ||
+                      Floci.DEFAULT_FLOCI_PORT,
+                    catch: () =>
+                      new AuthError({
+                        message: `invalid local emulator endpoint: ${endpoint}`,
+                      }),
+                  });
+                  yield* Floci.ensureFloci({ port }).pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new AuthError({ message: cause.message, cause }),
+                    ),
+                  );
+                } else if (!(yield* Floci.isServing(endpoint))) {
+                  return yield* new AuthError({
+                    message: `no local AWS emulator is listening at ${endpoint}`,
+                  });
+                }
+                const region = config.region ?? "us-east-1";
+                return {
+                  // Fixed dummy account — emulators accept any non-empty
+                  // credentials, and calling STS here would be pure overhead.
+                  accountId: config.accountId ?? LOCAL_ACCOUNT_ID,
+                  credentials: Effect.succeed<AwsCredentials>({
+                    accessKeyId: Redacted.make("test"),
+                    secretAccessKey: Redacted.make("test"),
+                    sessionToken: undefined,
+                    region,
+                  }),
                   region,
-                }),
-                region,
-                endpoint,
-                source: { type: "local" as const, details: endpoint },
-              } satisfies AwsResolvedCredentials;
-            }),
-          ),
-          Match.when({ method: "stored" }, () =>
-            store.read(profileName, STORAGE_KEY, AwsStoredCredentials).pipe(
-              Effect.flatMap((creds) =>
-                creds == null
-                  ? Effect.fail(
-                      new NeedsReauth({
-                        provider: AWS_AUTH_PROVIDER_NAME,
-                        profile: profileName,
-                        message: `AWS stored credentials not found. ${refreshHint(AWS_AUTH_PROVIDER_NAME, profileName)}`,
-                      }),
-                    )
-                  : Effect.succeed({
-                      accountId: creds.accountId,
-                      credentials: Effect.succeed<AwsCredentials>({
-                        accessKeyId: creds.accessKeyId,
-                        secretAccessKey: creds.secretAccessKey,
-                        sessionToken: creds.sessionToken,
-                        region: creds.region,
-                      }),
-                      region: creds.region,
-                      source: { type: "stored" as const },
-                    } satisfies AwsResolvedCredentials),
-              ),
-              // an older verson of the stored credentials didn't include the account ID, so we patch it hre
-              Effect.flatMap((creds) =>
-                creds.accountId
-                  ? Effect.succeed(creds)
-                  : creds.credentials.pipe(
-                      Effect.flatMap((resolved) =>
-                        getAccountId({
-                          accessKeyId: resolved.accessKeyId,
-                          secretAccessKey: resolved.secretAccessKey,
-                          sessionToken: resolved.sessionToken,
+                  endpoint,
+                  source: { type: "local" as const, details: endpoint },
+                } satisfies AwsResolvedCredentials;
+              }),
+            ),
+            Match.when({ method: "stored" }, () =>
+              store.read(profileName, STORAGE_KEY, AwsStoredCredentials).pipe(
+                Effect.flatMap((creds) =>
+                  creds == null
+                    ? Effect.fail(
+                        new NeedsReauth({
+                          provider: AWS_AUTH_PROVIDER_NAME,
+                          profile: profileName,
+                          message: `AWS stored credentials not found. ${reauth}`,
+                        }),
+                      )
+                    : Effect.succeed({
+                        accountId: creds.accountId,
+                        credentials: Effect.succeed<AwsCredentials>({
+                          accessKeyId: creds.accessKeyId,
+                          secretAccessKey: creds.secretAccessKey,
+                          sessionToken: creds.sessionToken,
                           region: creds.region,
                         }),
-                      ),
-                      Effect.map(
-                        (accountId) =>
-                          ({
-                            ...creds,
-                            accountId,
-                          }) satisfies AwsResolvedCredentials,
-                      ),
-                      // re-write the stored credentials
-                      Effect.tap((creds) =>
-                        creds.credentials.pipe(
-                          Effect.tap(
-                            ({ accessKeyId, secretAccessKey, sessionToken }) =>
-                              store.write(
-                                profileName,
-                                STORAGE_KEY,
-                                AwsStoredCredentials,
-                                {
-                                  accessKeyId,
-                                  secretAccessKey,
-                                  sessionToken,
-                                  region: creds.region,
-                                  accountId: creds.accountId,
-                                },
-                              ),
+                        region: creds.region,
+                        source: { type: "stored" as const },
+                      } satisfies AwsResolvedCredentials),
+                ),
+                // an older verson of the stored credentials didn't include the account ID, so we patch it hre
+                Effect.flatMap((creds) =>
+                  creds.accountId
+                    ? Effect.succeed(creds)
+                    : creds.credentials.pipe(
+                        Effect.flatMap((resolved) =>
+                          getAccountId({
+                            accessKeyId: resolved.accessKeyId,
+                            secretAccessKey: resolved.secretAccessKey,
+                            sessionToken: resolved.sessionToken,
+                            region: creds.region,
+                          }),
+                        ),
+                        Effect.map(
+                          (accountId) =>
+                            ({
+                              ...creds,
+                              accountId,
+                            }) satisfies AwsResolvedCredentials,
+                        ),
+                        // re-write the stored credentials
+                        Effect.tap((creds) =>
+                          creds.credentials.pipe(
+                            Effect.tap(
+                              ({
+                                accessKeyId,
+                                secretAccessKey,
+                                sessionToken,
+                              }) =>
+                                store.write(
+                                  profileName,
+                                  STORAGE_KEY,
+                                  AwsStoredCredentials,
+                                  {
+                                    accessKeyId,
+                                    secretAccessKey,
+                                    sessionToken,
+                                    region: creds.region,
+                                    accountId: creds.accountId,
+                                  },
+                                ),
+                            ),
                           ),
                         ),
                       ),
-                    ),
+                ),
               ),
             ),
-          ),
-          Match.when({ method: "sso" }, (config) =>
-            Effect.gen(function* () {
-              const auth = yield* DistilledAuth.Default;
-              const profile = yield* auth
-                .loadProfile(config.ssoProfile)
-                .pipe(Effect.catch(() => Effect.succeed(undefined)));
-              if (profile?.sso_account_id == null) {
-                return yield* Effect.fail(
-                  new AuthError({
-                    message:
-                      profile == null
-                        ? `AWS SSO profile '${config.ssoProfile}' was not found in ~/.aws/config. Configure it with \`aws configure sso\`, or run \`alchemy profile edit --reconfigure AWS\`.`
-                        : `AWS SSO profile '${config.ssoProfile}' has no sso_account_id in ~/.aws/config. Add it, or run \`alchemy profile edit --reconfigure AWS\`.`,
-                  }),
-                );
-              }
-              // `applyEnvRegionOverride` below only overrides an existing
-              // region, so an env-provided region must be consulted here for
-              // profiles that don't record one.
-              const region = profile.region ?? (yield* getEnv("AWS_REGION"));
-              if (!region) {
-                return yield* Effect.fail(
-                  new AuthError({
-                    message: `AWS SSO profile '${config.ssoProfile}' has no region in ~/.aws/config and AWS_REGION is not set.`,
-                  }),
-                );
-              }
-              return {
-                accountId: profile.sso_account_id,
-                // Rewrite the message of an expired/invalid SSO token to the
-                // alchemy refresh hint, but PRESERVE the error tags: the inner
-                // effect must stay a `CredentialsError` for downstream
-                // consumers (AWSEnvironment), while `details` and other
-                // in-provider consumers match these tags to surface a typed
-                // `NeedsReauth` instead of a generic failure.
-                credentials: auth
-                  .loadProfileCredentials(config.ssoProfile)
-                  .pipe(
-                    Effect.mapError((error) => {
-                      if (error._tag === "Alchemy::AWS::ExpiredSSOToken") {
-                        return new ExpiredSSOToken({
-                          message: `AWS SSO credentials need to be refreshed. ${refreshHint(AWS_AUTH_PROVIDER_NAME, profileName)}`,
-                          profile: error.profile,
-                        });
-                      }
-                      if (error._tag === "Alchemy::AWS::InvalidSSOToken") {
-                        return new InvalidSSOToken({
-                          message: `AWS SSO credentials need to be refreshed. ${refreshHint(AWS_AUTH_PROVIDER_NAME, profileName)}`,
-                          sso_session: error.sso_session,
-                        });
-                      }
-                      return error;
+            Match.when({ method: "sso" }, (config) =>
+              Effect.gen(function* () {
+                const auth = yield* DistilledAuth.Default;
+                const profile = yield* auth
+                  .loadProfile(config.ssoProfile)
+                  .pipe(Effect.catch(() => Effect.succeed(undefined)));
+                if (profile?.sso_account_id == null) {
+                  return yield* Effect.fail(
+                    new AuthError({
+                      message:
+                        profile == null
+                          ? `AWS SSO profile '${config.ssoProfile}' was not found in ~/.aws/config. Configure it with \`aws configure sso\`, or run \`${yield* profileCommandHint("alchemy profile edit --reconfigure AWS")}\`.`
+                          : `AWS SSO profile '${config.ssoProfile}' has no sso_account_id in ~/.aws/config. Add it, or run \`${yield* profileCommandHint("alchemy profile edit --reconfigure AWS")}\`.`,
                     }),
-                  ),
-                region,
-                source: { type: "sso" as const, details: config.ssoProfile },
-              } satisfies AwsResolvedCredentials;
-            }),
-          ),
-          Match.exhaustive,
-        )
-        .pipe(
-          // Pass diagnosable failures through untouched: NeedsReauth (stored
-          // credentials missing) and the specific AuthErrors raised above
-          // (missing SSO profile / sso_account_id / region) carry the real
-          // diagnosis. Only genuinely unexpected failures (store I/O, the
-          // STS accountId backfill) get wrapped.
-          Effect.mapError((e) =>
-            e._tag === "NeedsReauth" || e._tag === "AuthError"
-              ? e
-              : new AuthError({
-                  message: "failed to resolve AWS credentials",
-                  cause: e,
-                }),
-          ),
-          Effect.flatMap(applyEnvRegionOverride),
-          Effect.map((creds): AwsResolvedCredentials => ({
-            ...creds,
-            credentials: creds.credentials.pipe(
-              Effect.map((credentials) => ({
-                ...credentials,
-                region: creds.region,
-              })),
+                  );
+                }
+                // `applyEnvRegionOverride` below only overrides an existing
+                // region, so an env-provided region must be consulted here for
+                // profiles that don't record one.
+                const region = profile.region ?? (yield* getEnv("AWS_REGION"));
+                if (!region) {
+                  return yield* Effect.fail(
+                    new AuthError({
+                      message: `AWS SSO profile '${config.ssoProfile}' has no region in ~/.aws/config and AWS_REGION is not set.`,
+                    }),
+                  );
+                }
+                return {
+                  accountId: profile.sso_account_id,
+                  // Rewrite the message of an expired/invalid SSO token to the
+                  // alchemy refresh hint, but PRESERVE the error tags: the inner
+                  // effect must stay a `CredentialsError` for downstream
+                  // consumers (AWSEnvironment), while `details` and other
+                  // in-provider consumers match these tags to surface a typed
+                  // `NeedsReauth` instead of a generic failure.
+                  credentials: auth
+                    .loadProfileCredentials(config.ssoProfile)
+                    .pipe(
+                      Effect.mapError((error) => {
+                        if (error._tag === "Alchemy::AWS::ExpiredSSOToken") {
+                          return new ExpiredSSOToken({
+                            message: `AWS SSO credentials need to be refreshed. ${reauth}`,
+                            profile: error.profile,
+                          });
+                        }
+                        if (error._tag === "Alchemy::AWS::InvalidSSOToken") {
+                          return new InvalidSSOToken({
+                            message: `AWS SSO credentials need to be refreshed. ${reauth}`,
+                            sso_session: error.sso_session,
+                          });
+                        }
+                        return error;
+                      }),
+                    ),
+                  region,
+                  source: { type: "sso" as const, details: config.ssoProfile },
+                } satisfies AwsResolvedCredentials;
+              }),
             ),
-          })),
-        );
+            Match.exhaustive,
+          )
+          .pipe(
+            // Pass diagnosable failures through untouched: NeedsReauth (stored
+            // credentials missing) and the specific AuthErrors raised above
+            // (missing SSO profile / sso_account_id / region) carry the real
+            // diagnosis. Only genuinely unexpected failures (store I/O, the
+            // STS accountId backfill) get wrapped.
+            Effect.mapError((e) =>
+              e._tag === "NeedsReauth" || e._tag === "AuthError"
+                ? e
+                : new AuthError({
+                    message: "failed to resolve AWS credentials",
+                    cause: e,
+                  }),
+            ),
+            Effect.flatMap(applyEnvRegionOverride),
+            Effect.map((creds): AwsResolvedCredentials => ({
+              ...creds,
+              credentials: creds.credentials.pipe(
+                Effect.map((credentials) => ({
+                  ...credentials,
+                  region: creds.region,
+                })),
+              ),
+            })),
+          );
+      });
 
     const details = (profileName: string, config: AwsAuthConfig) =>
       Effect.gen(function* () {
@@ -665,6 +674,7 @@ export const AwsAuth = AuthProviderLayer<
           } satisfies ProviderDetails;
         }
         const creds = yield* resolveCredentials(profileName, config);
+        const reauth = yield* refreshHint(AWS_AUTH_PROVIDER_NAME, profileName);
         // Resolve the live credentials. An expired/invalid SSO token only
         // surfaces here (the inner effect is lazy), so convert those tags
         // into a typed NeedsReauth instead of a generic error line.
@@ -676,7 +686,7 @@ export const AwsAuth = AuthProviderLayer<
                 ? new NeedsReauth({
                     provider: AWS_AUTH_PROVIDER_NAME,
                     profile: profileName,
-                    message: `AWS SSO credentials need to be refreshed. ${refreshHint(AWS_AUTH_PROVIDER_NAME, profileName)}`,
+                    message: `AWS SSO credentials need to be refreshed. ${reauth}`,
                     cause: error,
                   })
                 : new AuthError({

@@ -23,8 +23,28 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import path from "pathe";
+import { messageForCapabilities } from "@/Util/interactive.ts";
 
 const FAKE_PROVIDER = "FakeAuthProvider";
+
+it.effect("selects guidance from injected interaction capabilities", () =>
+  Effect.gen(function* () {
+    expect(
+      yield* messageForCapabilities(
+        Effect.succeed({ input: true }),
+        "interactive",
+        "plain",
+      ),
+    ).toBe("interactive");
+    expect(
+      yield* messageForCapabilities(
+        Effect.succeed({ input: false }),
+        "interactive",
+        "plain",
+      ),
+    ).toBe("plain");
+  }),
+);
 
 // Records whether the lock-wrapped `configure` was ever entered. A missing
 // profile must short-circuit before provider configuration starts.
