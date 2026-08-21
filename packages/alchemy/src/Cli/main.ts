@@ -19,6 +19,11 @@ import packageJson from "../../package.json" with { type: "json" };
 import * as CliKit from "./CliKit/index.ts";
 import { checkLatestVersion } from "./checkVersion.ts";
 import { handleCliErrors } from "./commands/_shared.ts";
+import {
+  compatibilityCommand,
+  compatibilityCommands,
+  type CompatibilityCommand,
+} from "./commands/compat.ts";
 import { selectCliServices } from "./selectCli.ts";
 
 const commandMetadata = [
@@ -68,6 +73,18 @@ const loadCommand = async (name: CommandName) => {
 };
 
 const argv = process.argv.slice(2);
+const compatibilityName = Object.hasOwn(compatibilityCommands, argv[0] ?? "")
+  ? (argv[0] as CompatibilityCommand)
+  : undefined;
+
+// Compatibility commands only print their replacement. Discard everything
+// after the old command name so historical positional arguments and flags are
+// accepted without teaching the retired parser surface about every old form.
+if (compatibilityName !== undefined) {
+  const index = process.argv.indexOf(compatibilityName, 2);
+  process.argv.splice(index + 1);
+}
+
 const requestedCommand = commandMetadata.find(([name]) =>
   argv.includes(name),
 )?.[0];
@@ -107,7 +124,12 @@ const root = Command.make("alchemy", {}, () =>
     { command: "alchemy dev" },
     { command: "alchemy logs --follow" },
   ]),
-  Command.withSubcommands([...commands]),
+  Command.withSubcommands([
+    ...commands,
+    ...Object.keys(compatibilityCommands).map((name) =>
+      compatibilityCommand(name as CompatibilityCommand),
+    ),
+  ]),
   Command.withGlobalFlags([NoInput]),
 );
 
