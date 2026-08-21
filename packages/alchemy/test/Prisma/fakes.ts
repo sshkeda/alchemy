@@ -13,7 +13,7 @@ export const makeFakeProfileStore = (
   createProfile: () => Effect.void,
   renameProfile: () => Effect.void,
   setDefaultProfile: () => Effect.void,
-  current: Effect.succeed({ name: "default", source: "fallback" }),
+  current: Effect.succeed({ name: "default", source: "configuration" }),
   setProfile: () => Effect.void,
   deleteProfile: () => Effect.succeed(false),
   loadProviderConfig: <Config extends { method: string }>() =>
